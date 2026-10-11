@@ -75,23 +75,23 @@ VARIANTS: dict[str, Variant] = {
     v.key: v
     for v in (
         Variant(
-            key="lotus",
-            description="frames sent by the Lotus Lantern / LotusLanternX app",
-            name_prefixes=("ELK-BLEDOM", "ELK_BLEDOM", "BLEDOM", "ELK-BLE", "ELK-BTC", "ELK-BULB", "LEDBLE"),
+            key="classic",
+            description="the frames most open-source ELK-BLEDOM tools send",
+            name_prefixes=("ELK", "BLEDOM", "ELK-BLEDOM", "ELK_BLEDOM", "ELK-BLE", "ELK-BTC", "LEDBLE"),
+            power_on=frame(0x00, 0x04, 0xF0, 0x00, 0x01, 0xFF, 0x00),
+            power_off=frame(0x00, 0x04, 0x00, 0x00, 0x00, 0xFF, 0x00),
+            color_template=(0x00, 0x05, 0x03, "R", "G", "B", 0x00),
+            brightness_template=(0x00, 0x01, "L", 0x00, 0x00, 0x00, 0x00),
+        ),
+        Variant(
+            key="app",
+            description="the frames the official Lotus Lantern app sends",
+            name_prefixes=(),
             power_on=frame(0x04, 0x04, 0x01, 0x00, 0x01, 0xFF, 0x00),
             power_off=frame(0x04, 0x04, 0x00, 0x00, 0x00, 0xFF, 0x00),
             color_template=(0x07, 0x05, 0x03, "R", "G", "B", 0x10),
             stream_template=(0x07, 0x05, 0x03, "R", "G", "B", 0x20),
             brightness_template=(0x04, 0x01, "L", 0xFF, 0xFF, 0xFF, 0x00),
-        ),
-        Variant(
-            key="legacy",
-            description="older ELK-BLEDOM frames, Home Assistant's generic model",
-            name_prefixes=(),
-            power_on=frame(0x00, 0x04, 0xF0, 0x00, 0x01, 0xFF, 0x00),
-            power_off=frame(0x00, 0x04, 0x00, 0x00, 0x00, 0xFF, 0x00),
-            color_template=(0x00, 0x05, 0x03, "R", "G", "B", 0x00),
-            brightness_template=(0x00, 0x01, "L", 0xFF, 0x00, 0xFF, 0x00),
         ),
         Variant(
             key="bledob",
@@ -106,8 +106,8 @@ VARIANTS: dict[str, Variant] = {
         ),
         Variant(
             key="melk",
-            description="MELK-* controllers, which disconnect unless they get a login first",
-            name_prefixes=("MELK",),
+            description="MELK-* controllers, which hang up unless they get a login first",
+            name_prefixes=("MELK", "MODELX"),
             power_on=frame(0x00, 0x04, 0x01, 0x00, 0x00, 0x00, 0x00),
             power_off=frame(0x00, 0x04, 0x00, 0x00, 0x00, 0xFF, 0x00),
             color_template=(0x00, 0x05, 0x03, "R", "G", "B", 0x00),
@@ -117,7 +117,12 @@ VARIANTS: dict[str, Variant] = {
     )
 }
 
-DEFAULT_VARIANT = VARIANTS["lotus"]
+DEFAULT_VARIANT = VARIANTS["classic"]
+
+# Every power-on frame that means "on" whatever the dialect, so ``probe`` can light the
+# strip before testing colors. MELK's power-on is left out: other firmwares read those
+# same bytes as "off".
+WAKE_FRAMES = tuple(VARIANTS[k].power_on for k in ("classic", "app", "bledob"))
 
 
 def variant_for_name(name: str | None) -> Variant:

@@ -144,6 +144,7 @@ async def cmd_test(args) -> int:
             await step()
             await asyncio.sleep(1.5)
         print("\nIf the strip followed every step, the PC can control it. Next: 'bench'.")
+        print("If it did nothing, it speaks another dialect: run 'probe'.")
     return 0
 
 
@@ -173,25 +174,36 @@ async def cmd_bench(args) -> int:
     return 0
 
 
-PROBE_COLORS = [("RED", (255, 0, 0)), ("GREEN", (0, 255, 0)), ("BLUE", (0, 0, 255)), ("PURPLE", (128, 0, 255))]
+async def _blink(strip: LedStrip) -> None:
+    while True:
+        for rgb in ((255, 0, 0), (0, 0, 255)):
+            await strip.color(*rgb)
+            await asyncio.sleep(0.7)
 
 
 async def cmd_probe(args) -> int:
-    """Try each known protocol variant until the user confirms the strip responded.
+    """Try each known protocol variant until the user sees the strip respond.
 
-    Each variant shows a different color, so a color left over from an earlier attempt
-    (or from the phone app) cannot be mistaken for success.
+    The strip blinks red/blue with each candidate; a blink cannot be a color left over
+    from an earlier attempt or from the phone app.
     """
     found = await device.resolve(args.device, args.timeout)
     guess = protocol.variant_for_name(found.name)
     order = [guess] + [v for v in protocol.VARIANTS.values() if v.key != guess.key]
-    for variant, (label, rgb) in zip(order, PROBE_COLORS * len(order)):
+    for variant in order:
         print(f"\nTrying variant '{variant.key}': {variant.description}")
         async with LedStrip(found, variant, with_response=args.with_response) as strip:
+            for packet in protocol.WAKE_FRAMES:
+                await strip.write(packet)
             await strip.power(True)
-            await strip.color(*rgb)
-            # input() blocks; keep the event loop (and the Bluetooth link) running meanwhile.
-            answer = await asyncio.to_thread(input, f"Is the strip on and {label} now? [y/N] ")
+            blink = asyncio.create_task(_blink(strip))
+            try:
+                # input() blocks; keep the event loop (and the Bluetooth link) running meanwhile.
+                answer = await asyncio.to_thread(input, "Is the strip blinking RED and BLUE? [y/N] ")
+            finally:
+                blink.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await blink
             if answer.strip().lower().startswith("y"):
                 await strip.color(255, 255, 255)
                 print(f"\nYour strip speaks variant '{variant.key}'. Add this to every command: --variant {variant.key}")

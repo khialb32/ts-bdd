@@ -29,7 +29,7 @@ def test_every_command_parses():
         ["scan", "--all"],
         ["inspect", "-d", "ELK"],
         ["on"],
-        ["off", "--variant", "legacy"],
+        ["off", "--variant", "classic"],
         ["color", "255", "0", "0"],
         ["brightness", "50"],
         ["test", "--no-with-response"],
@@ -56,6 +56,9 @@ class RecordingStrip:
     async def __aexit__(self, *exc):
         pass
 
+    async def write(self, packet):
+        self.log.append((self.variant.key, "write", packet))
+
     async def power(self, on):
         self.log.append((self.variant.key, "power", on))
 
@@ -63,10 +66,10 @@ class RecordingStrip:
         self.log.append((self.variant.key, "color", rgb))
 
 
-def test_probe_shows_a_different_color_per_variant_and_stops_on_yes(monkeypatch):
+def test_probe_wakes_the_strip_tries_variants_in_order_and_stops_on_yes(monkeypatch):
     import asyncio
 
-    from ambilight import cli, device
+    from ambilight import cli, device, protocol
     from ambilight.device import Found
 
     async def fake_resolve(identifier, timeout):
@@ -80,5 +83,8 @@ def test_probe_shows_a_different_color_per_variant_and_stops_on_yes(monkeypatch)
 
     args = build_parser().parse_args(["probe"])
     assert asyncio.run(cli.cmd_probe(args)) == 0
-    colors = [(key, rgb) for key, kind, rgb in RecordingStrip.log if kind == "color"]
-    assert colors == [("lotus", (255, 0, 0)), ("legacy", (0, 255, 0)), ("legacy", (255, 255, 255))]
+    log = RecordingStrip.log
+    assert [key for key, kind, _ in log if kind == "power"] == ["classic", "app"]
+    for key in ("classic", "app"):
+        assert [p for k, kind, p in log if k == key and kind == "write"] == list(protocol.WAKE_FRAMES)
+    assert log[-1] == ("app", "color", (255, 255, 255))

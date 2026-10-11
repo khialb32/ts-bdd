@@ -52,9 +52,9 @@ With one strip nearby, every command finds it by itself. With several, pick one 
 
 1. `python -m ambilight scan --all`: if nothing marked `*` shows up, the phone is
    probably still connected, or the strip is out of range or unpowered.
-2. `python -m ambilight probe`: tries each known dialect of the protocol and asks
-   whether the strip turned red. When one works, pass it on from then on, for
-   example `--variant legacy`.
+2. `python -m ambilight probe`: tries each known dialect of the protocol, making the
+   strip blink red and blue, and asks whether it does. When one works, add it to every
+   command from then on, for example `--variant app`.
 3. `python -m ambilight inspect`: prints the firmware ID and every Bluetooth
    characteristic. Share that output if nothing works.
 
@@ -65,28 +65,23 @@ updates/second `bench` reached with a smooth rainbow.
 
 Every command is one 9-byte frame written, without response, to characteristic
 `0000fff3-…` (service `fff0`). The controller never answers, so success is judged by
-watching the strip. The frames come from the
-[lotus-led](https://github.com/AlexMelanFromRingo/lotus-led) project, which transcribed
-them from the official Lotus Lantern Android app.
+watching the strip. Firmwares differ in the exact bytes, so four dialects are built in;
+byte tables are in `ambilight/protocol.py`. The tool guesses one from the advertised
+name, `probe` confirms it on your strip, and `--variant` forces it.
 
-| Command | Frame |
-|---|---|
-| power on / off | `7e 04 04 01 00 01 ff 00 ef` / `7e 04 04 00 00 00 ff 00 ef` |
-| color | `7e 07 05 03 RR GG BB 10 ef` |
-| color, streaming (screen sync) | `7e 07 05 03 RR GG BB 20 ef` |
-| brightness 0-100 | `7e 04 01 LL ff ff ff 00 ef` |
+| Variant | Guessed for | Color frame | Notes |
+|---|---|---|---|
+| `classic` | ELK-BLEDOM and other ELK-…, LEDBLE | `7e 00 05 03 RR GG BB 00 ef` | default; what most open-source tools send |
+| `app` | (via `probe` / `--variant`) | `7e 07 05 03 RR GG BB 10 ef` | what the official app sends; has a streaming form (`… 20 ef`) for screen sync |
+| `bledob` | ELK-BLEDOB, ELK-BLEDOM0E | `7e 07 05 03 RR GG BB 0a ef` | max 10 updates/s |
+| `melk` | MELK-… | `7e 00 05 03 RR GG BB 00 ef` | sends a login right after connecting, or the controller hangs up |
 
-Those are the `lotus` frames, the default. Controller firmwares differ, so three other
-dialects are built in (byte tables in `ambilight/protocol.py`, taken from the
-[elkbledom](https://github.com/dave-code-ruiz/elkbledom) Home Assistant integration).
-The tool guesses from the advertised name; `probe` confirms it, and `--variant` forces it.
-
-| Variant | Guessed for | Difference |
-|---|---|---|
-| `lotus` | ELK-BLEDOM, ELK-BLE, ELK-BTC, ELK-BULB, LEDBLE | the official app's frames |
-| `legacy` | (only via `probe` / `--variant`) | older `7e 00 …` frames |
-| `bledob` | ELK-BLEDOB, ELK-BLEDOM0E | `7e 07 …` frames, max 10 updates/s |
-| `melk` | MELK-… | sends a login right after connecting, or the controller hangs up |
+Sources: `classic` is what [elkbledom](https://github.com/dave-code-ruiz/elkbledom)
+(Home Assistant), [elk-led-controller](https://github.com/b1scoito/elk-led-controller),
+[ELK-BLEDOM](https://github.com/FergusInLondon/ELK-BLEDOM) and
+[bledom-qt](https://github.com/uriid1-experiments/bledom-qt) all send; `app` comes from
+[lotus-led](https://github.com/AlexMelanFromRingo/lotus-led), transcribed from the
+Lotus Lantern Android app; `bledob` and `melk` come from elkbledom's per-model tables.
 
 Writes are capped at 20 per second (10 for `bledob`), about what the controller's chip
 handles before it starts dropping frames.

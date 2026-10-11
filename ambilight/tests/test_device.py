@@ -96,7 +96,7 @@ def test_writes_without_response_when_supported(monkeypatch):
             await strip.color(255, 0, 0)
 
     run(go())
-    assert client.writes == [(FFF3, bytes.fromhex("7e 07 05 03 ff 00 00 10 ef"), False)]
+    assert client.writes == [(FFF3, bytes.fromhex("7e 00 05 03 ff 00 00 00 ef"), False)]
     assert not client.connected
 
 

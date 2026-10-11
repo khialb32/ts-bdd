@@ -3,7 +3,8 @@ import pytest
 from ambilight import protocol
 from ambilight.protocol import VARIANTS, frame, variant_for_name
 
-LOTUS = VARIANTS["lotus"]
+APP = VARIANTS["app"]
+CLASSIC = VARIANTS["classic"]
 
 
 def h(packet: bytes) -> str:
@@ -19,35 +20,40 @@ def test_frame_rejects_wrong_length():
         frame(1, 2, 3)
 
 
-# Expected bytes are the test vectors of the lotus-led library, which transcribed
-# them from the Lotus Lantern Android app.
-def test_lotus_power():
-    assert h(LOTUS.power(True)) == "7e 04 04 01 00 01 ff 00 ef"
-    assert h(LOTUS.power(False)) == "7e 04 04 00 00 00 ff 00 ef"
+# Expected bytes for "classic" are what elkbledom (Home Assistant), elk-led-controller,
+# ELK-BLEDOM (Go) and bledom-qt all send to a plain ELK-BLEDOM.
+def test_classic_frames():
+    assert h(CLASSIC.power(True)) == "7e 00 04 f0 00 01 ff 00 ef"
+    assert h(CLASSIC.power(False)) == "7e 00 04 00 00 00 ff 00 ef"
+    assert h(CLASSIC.color(1, 2, 3)) == "7e 00 05 03 01 02 03 00 ef"
+    assert h(CLASSIC.brightness(50)) == "7e 00 01 32 00 00 00 00 ef"
 
 
-def test_lotus_color():
-    assert h(LOTUS.color(0xAA, 0xBB, 0xCC)) == "7e 07 05 03 aa bb cc 10 ef"
+def test_classic_is_the_default():
+    assert protocol.DEFAULT_VARIANT is CLASSIC
 
 
-def test_lotus_stream_color_uses_streaming_trailer():
-    assert h(LOTUS.stream_color(0xAA, 0xBB, 0xCC)) == "7e 07 05 03 aa bb cc 20 ef"
+# Expected bytes for "app" are the test vectors of the lotus-led library, which
+# transcribed them from the Lotus Lantern Android app.
+def test_app_power():
+    assert h(APP.power(True)) == "7e 04 04 01 00 01 ff 00 ef"
+    assert h(APP.power(False)) == "7e 04 04 00 00 00 ff 00 ef"
 
 
-def test_lotus_brightness_is_a_percentage():
-    assert h(LOTUS.brightness(100)) == "7e 04 01 64 ff ff ff 00 ef"
-    assert h(LOTUS.brightness(0)) == "7e 04 01 00 ff ff ff 00 ef"
+def test_app_color():
+    assert h(APP.color(0xAA, 0xBB, 0xCC)) == "7e 07 05 03 aa bb cc 10 ef"
 
 
-# Expected bytes for the other variants are the elkbledom integration's models.json.
-def test_legacy_frames():
-    legacy = VARIANTS["legacy"]
-    assert h(legacy.power(True)) == "7e 00 04 f0 00 01 ff 00 ef"
-    assert h(legacy.power(False)) == "7e 00 04 00 00 00 ff 00 ef"
-    assert h(legacy.color(1, 2, 3)) == "7e 00 05 03 01 02 03 00 ef"
-    assert h(legacy.brightness(50)) == "7e 00 01 32 ff 00 ff 00 ef"
+def test_app_stream_color_uses_streaming_trailer():
+    assert h(APP.stream_color(0xAA, 0xBB, 0xCC)) == "7e 07 05 03 aa bb cc 20 ef"
 
 
+def test_app_brightness_is_a_percentage():
+    assert h(APP.brightness(100)) == "7e 04 01 64 ff ff ff 00 ef"
+    assert h(APP.brightness(0)) == "7e 04 01 00 ff ff ff 00 ef"
+
+
+# Expected bytes for bledob and melk are the elkbledom integration's models.json.
 def test_bledob_frames():
     bledob = VARIANTS["bledob"]
     assert h(bledob.power(True)) == "7e 07 04 ff 00 01 02 01 ef"
@@ -67,8 +73,14 @@ def test_melk_frames_and_login():
 
 
 def test_stream_color_falls_back_to_color_without_a_stream_template():
-    legacy = VARIANTS["legacy"]
-    assert legacy.stream_color(1, 2, 3) == legacy.color(1, 2, 3)
+    assert CLASSIC.stream_color(1, 2, 3) == CLASSIC.color(1, 2, 3)
+
+
+def test_wake_frames_are_power_on_frames_and_never_melks():
+    assert CLASSIC.power_on in protocol.WAKE_FRAMES
+    assert APP.power_on in protocol.WAKE_FRAMES
+    # Some firmwares read MELK's power-on bytes as "off".
+    assert VARIANTS["melk"].power_on not in protocol.WAKE_FRAMES
 
 
 @pytest.mark.parametrize("variant", VARIANTS.values(), ids=lambda v: v.key)
@@ -81,13 +93,13 @@ def test_every_frame_is_nine_bytes(variant):
 @pytest.mark.parametrize("rgb", [(-1, 0, 0), (0, 256, 0), (0, 0, 300)])
 def test_color_rejects_out_of_range(rgb):
     with pytest.raises(ValueError):
-        LOTUS.color(*rgb)
+        APP.color(*rgb)
 
 
 @pytest.mark.parametrize("level", [-1, 101, 255])
 def test_brightness_rejects_out_of_range(level):
     with pytest.raises(ValueError):
-        LOTUS.brightness(level)
+        APP.brightness(level)
 
 
 @pytest.mark.parametrize(
@@ -105,13 +117,15 @@ def test_other_names_are_not(name):
 @pytest.mark.parametrize(
     "name, key",
     [
-        ("ELK-BLEDOM", "lotus"),
-        ("ELK-BLEDOM   ", "lotus"),
-        ("ELK-BLE", "lotus"),
+        ("ELK-BLEDOM", "classic"),
+        ("ELK-BLEDOM   ", "classic"),
+        ("ELK-BLE", "classic"),
+        ("ELK-SOMETHING-NEW", "classic"),
         ("ELK-BLEDOB", "bledob"),
         ("ELK-BLEDOM0E", "bledob"),
         ("MELK-OA10", "melk"),
         ("melk-oc10", "melk"),
+        ("MODELX", "melk"),
     ],
 )
 def test_variant_for_name_prefers_longest_prefix(name, key):
