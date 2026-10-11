@@ -29,12 +29,13 @@ def test_classic_frames():
     assert h(CLASSIC.brightness(50)) == "7e 00 01 32 00 00 00 00 ef"
 
 
-def test_classic_is_the_default():
-    assert protocol.DEFAULT_VARIANT is CLASSIC
+def test_app_is_the_default():
+    assert protocol.DEFAULT_VARIANT is APP
 
 
 # Expected bytes for "app" are the test vectors of the lotus-led library, which
-# transcribed them from the Lotus Lantern Android app.
+# transcribed them from the Lotus Lantern Android app; Rxflex/LotusLantern's
+# decompile of the same app lists the same frames.
 def test_app_power():
     assert h(APP.power(True)) == "7e 04 04 01 00 01 ff 00 ef"
     assert h(APP.power(False)) == "7e 04 04 00 00 00 ff 00 ef"
@@ -117,10 +118,10 @@ def test_other_names_are_not(name):
 @pytest.mark.parametrize(
     "name, key",
     [
-        ("ELK-BLEDOM", "classic"),
-        ("ELK-BLEDOM   ", "classic"),
-        ("ELK-BLE", "classic"),
-        ("ELK-SOMETHING-NEW", "classic"),
+        ("ELK-BLEDOM", "app"),
+        ("ELK-BLEDOM   ", "app"),
+        ("ELK-BLE", "app"),
+        ("ELK-SOMETHING-NEW", "app"),
         ("ELK-BLEDOB", "bledob"),
         ("ELK-BLEDOM0E", "bledob"),
         ("MELK-OA10", "melk"),

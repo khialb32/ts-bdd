@@ -84,7 +84,7 @@ def test_probe_wakes_the_strip_tries_variants_in_order_and_stops_on_yes(monkeypa
     args = build_parser().parse_args(["probe"])
     assert asyncio.run(cli.cmd_probe(args)) == 0
     log = RecordingStrip.log
-    assert [key for key, kind, _ in log if kind == "power"] == ["classic", "app"]
-    for key in ("classic", "app"):
+    assert [key for key, kind, _ in log if kind == "power"] == ["app", "classic"]
+    for key in ("app", "classic"):
         assert [p for k, kind, p in log if k == key and kind == "write"] == list(protocol.WAKE_FRAMES)
-    assert log[-1] == ("app", "color", (255, 255, 255))
+    assert log[-1] == ("classic", "color", (255, 255, 255))

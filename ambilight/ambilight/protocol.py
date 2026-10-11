@@ -4,8 +4,10 @@ Every command is one 9-byte frame: 0x7E, seven payload bytes, 0xEF. The controll
 drops anything else silently and never answers, so there is no way to ask it which
 dialect it speaks: ``probe`` tries each one while the user watches the strip.
 
-Sources: the lotus-led library (frames transcribed from the Lotus Lantern Android app)
-and the elkbledom Home Assistant integration (per-model tables in models.json).
+Sources: the "app" frames are what the Lotus Lantern Android app (wl.smartled, the
+twin of the LotusLanternX iPhone app) sends, decompiled independently by lotus-led and
+Rxflex/LotusLantern. "classic" is what most other open-source tools send. bledob and
+melk come from the elkbledom Home Assistant integration's per-model tables.
 """
 
 from __future__ import annotations
@@ -75,23 +77,23 @@ VARIANTS: dict[str, Variant] = {
     v.key: v
     for v in (
         Variant(
-            key="classic",
-            description="the frames most open-source ELK-BLEDOM tools send",
-            name_prefixes=("ELK", "BLEDOM", "ELK-BLEDOM", "ELK_BLEDOM", "ELK-BLE", "ELK-BTC", "LEDBLE"),
-            power_on=frame(0x00, 0x04, 0xF0, 0x00, 0x01, 0xFF, 0x00),
-            power_off=frame(0x00, 0x04, 0x00, 0x00, 0x00, 0xFF, 0x00),
-            color_template=(0x00, 0x05, 0x03, "R", "G", "B", 0x00),
-            brightness_template=(0x00, 0x01, "L", 0x00, 0x00, 0x00, 0x00),
-        ),
-        Variant(
             key="app",
-            description="the frames the official Lotus Lantern app sends",
-            name_prefixes=(),
+            description="the frames the LotusLanternX / Lotus Lantern app sends",
+            name_prefixes=("ELK", "BLEDOM", "ELK-BLEDOM", "ELK_BLEDOM", "ELK-BLE", "ELK-BTC", "LEDBLE"),
             power_on=frame(0x04, 0x04, 0x01, 0x00, 0x01, 0xFF, 0x00),
             power_off=frame(0x04, 0x04, 0x00, 0x00, 0x00, 0xFF, 0x00),
             color_template=(0x07, 0x05, 0x03, "R", "G", "B", 0x10),
             stream_template=(0x07, 0x05, 0x03, "R", "G", "B", 0x20),
             brightness_template=(0x04, 0x01, "L", 0xFF, 0xFF, 0xFF, 0x00),
+        ),
+        Variant(
+            key="classic",
+            description="the frames most open-source ELK-BLEDOM tools send",
+            name_prefixes=(),
+            power_on=frame(0x00, 0x04, 0xF0, 0x00, 0x01, 0xFF, 0x00),
+            power_off=frame(0x00, 0x04, 0x00, 0x00, 0x00, 0xFF, 0x00),
+            color_template=(0x00, 0x05, 0x03, "R", "G", "B", 0x00),
+            brightness_template=(0x00, 0x01, "L", 0x00, 0x00, 0x00, 0x00),
         ),
         Variant(
             key="bledob",
@@ -117,12 +119,12 @@ VARIANTS: dict[str, Variant] = {
     )
 }
 
-DEFAULT_VARIANT = VARIANTS["classic"]
+DEFAULT_VARIANT = VARIANTS["app"]
 
 # Every power-on frame that means "on" whatever the dialect, so ``probe`` can light the
 # strip before testing colors. MELK's power-on is left out: other firmwares read those
 # same bytes as "off".
-WAKE_FRAMES = tuple(VARIANTS[k].power_on for k in ("classic", "app", "bledob"))
+WAKE_FRAMES = tuple(VARIANTS[k].power_on for k in ("app", "classic", "bledob"))
 
 
 def variant_for_name(name: str | None) -> Variant:

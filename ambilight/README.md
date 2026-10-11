@@ -54,7 +54,7 @@ With one strip nearby, every command finds it by itself. With several, pick one 
    probably still connected, or the strip is out of range or unpowered.
 2. `python -m ambilight probe`: tries each known dialect of the protocol, making the
    strip blink red and blue, and asks whether it does. When one works, add it to every
-   command from then on, for example `--variant app`.
+   command from then on, for example `--variant classic`.
 3. `python -m ambilight inspect`: prints the firmware ID and every Bluetooth
    characteristic. Share that output if nothing works.
 
@@ -71,17 +71,20 @@ name, `probe` confirms it on your strip, and `--variant` forces it.
 
 | Variant | Guessed for | Color frame | Notes |
 |---|---|---|---|
-| `classic` | ELK-BLEDOM and other ELK-…, LEDBLE | `7e 00 05 03 RR GG BB 00 ef` | default; what most open-source tools send |
-| `app` | (via `probe` / `--variant`) | `7e 07 05 03 RR GG BB 10 ef` | what the official app sends; has a streaming form (`… 20 ef`) for screen sync |
+| `app` | ELK-BLEDOM and other ELK-…, LEDBLE | `7e 07 05 03 RR GG BB 10 ef` | default; exactly what the LotusLanternX app sends; has a streaming form (`… 20 ef`) for screen sync |
+| `classic` | (via `probe` / `--variant`) | `7e 00 05 03 RR GG BB 00 ef` | what most open-source tools send |
 | `bledob` | ELK-BLEDOB, ELK-BLEDOM0E | `7e 07 05 03 RR GG BB 0a ef` | max 10 updates/s |
 | `melk` | MELK-… | `7e 00 05 03 RR GG BB 00 ef` | sends a login right after connecting, or the controller hangs up |
 
-Sources: `classic` is what [elkbledom](https://github.com/dave-code-ruiz/elkbledom)
-(Home Assistant), [elk-led-controller](https://github.com/b1scoito/elk-led-controller),
+Sources: `app` is what the Android twin of LotusLanternX ("Lotus Lantern", `wl.smartled`)
+sends, decompiled independently by
+[lotus-led](https://github.com/AlexMelanFromRingo/lotus-led) and
+[Rxflex/LotusLantern](https://github.com/Rxflex/LotusLantern). `classic` is what
+[elkbledom](https://github.com/dave-code-ruiz/elkbledom) (Home Assistant),
+[elk-led-controller](https://github.com/b1scoito/elk-led-controller),
 [ELK-BLEDOM](https://github.com/FergusInLondon/ELK-BLEDOM) and
-[bledom-qt](https://github.com/uriid1-experiments/bledom-qt) all send; `app` comes from
-[lotus-led](https://github.com/AlexMelanFromRingo/lotus-led), transcribed from the
-Lotus Lantern Android app; `bledob` and `melk` come from elkbledom's per-model tables.
+[bledom-qt](https://github.com/uriid1-experiments/bledom-qt) send. `bledob` and `melk`
+come from elkbledom's per-model tables.
 
 Writes are capped at 20 per second (10 for `bledob`), about what the controller's chip
 handles before it starts dropping frames.
