@@ -1,0 +1,13 @@
+[project]
+name = "ambilight"
+version = "0.1.0"
+description = "Drive a LotusLanternX (ELK-BLEDOM) LED strip from a PC over Bluetooth LE"
+requires-python = ">=3.10"
+dependencies = ["bleak>=1.0,<4"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
