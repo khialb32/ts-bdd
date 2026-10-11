@@ -14,13 +14,34 @@ Turn a LotusLanternX LED strip into a backlight for your screen.
 You need Python 3.10 or newer and a PC with Bluetooth Low Energy (almost every laptop;
 on a desktop, any Bluetooth 4.0+ USB dongle).
 
-```sh
+**Windows** (install Python from [python.org](https://www.python.org/downloads/) and
+tick "Add python.exe to PATH"). In a Command Prompt (`cmd`), not PowerShell:
+
+```bat
 cd ambilight
-python -m venv .venv
-# Windows:      .venv\Scripts\activate
-# macOS/Linux:  source .venv/bin/activate
+py -m venv .venv
+.venv\Scripts\activate
 pip install -r requirements.txt
 ```
+
+PowerShell refuses `activate` by default ("running scripts is disabled"); either use
+`cmd`, or run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once.
+
+**macOS / Linux:**
+
+```sh
+cd ambilight
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+`python3 --version` must say 3.10 or newer. macOS's built-in `python3` is often 3.9:
+install a newer one from python.org or with `brew install python`. On Debian/Ubuntu,
+`python3 -m venv` needs `sudo apt install python3-venv` first.
+
+Once the environment is active, `python` means the right interpreter on every OS, so
+the commands below work as written. In a new terminal, activate it again first.
 
 **Before every session: fully close LotusLanternX on your phone.** The controller
 accepts a single connection; while the phone holds it, the PC cannot even see the strip.
@@ -32,7 +53,8 @@ If in doubt, turn Bluetooth off on the phone.
   (System Settings → Privacy & Security → Bluetooth). macOS shows a UUID instead of
   a MAC address; use that wherever an address is asked for.
 - **Linux:** needs BlueZ (`bluetoothctl` working). If scanning fails with a permission
-  error, add your user to the `bluetooth` group.
+  error, add your user to the `bluetooth` group. If the strip vanishes after a crash,
+  the PC may still hold the link: `bluetoothctl disconnect <address>`.
 
 ## Try it
 
@@ -51,7 +73,10 @@ With one strip nearby, every command finds it by itself. With several, pick one 
 ### If the strip does not react
 
 1. `python -m ambilight scan --all`: if nothing marked `*` shows up, the phone is
-   probably still connected, or the strip is out of range or unpowered.
+   probably still connected, or the strip is out of range or unpowered. Some strips
+   advertise no name; on Windows/Linux the tool still spots their `BE:60:65:…`
+   address, but on macOS it cannot. Look for a strong `(no name)` entry that
+   disappears when you unplug the strip, and pass its address with `-d`.
 2. `python -m ambilight probe`: tries each known dialect of the protocol, making the
    strip blink red and blue, and asks whether it does. When one works, add it to every
    command from then on, for example `--variant classic`.
@@ -73,7 +98,7 @@ name, `probe` confirms it on your strip, and `--variant` forces it.
 |---|---|---|---|
 | `app` | ELK-BLEDOM and other ELK-…, LEDBLE | `7e 07 05 03 RR GG BB 10 ef` | default; exactly what the LotusLanternX app sends; has a streaming form (`… 20 ef`) for screen sync |
 | `classic` | (via `probe` / `--variant`) | `7e 00 05 03 RR GG BB 00 ef` | what most open-source tools send |
-| `bledob` | ELK-BLEDOB, ELK-BLEDOM0E | `7e 07 05 03 RR GG BB 0a ef` | max 10 updates/s |
+| `bledob` | ELK-BLEDOB, ELK-BLEDOM0E | `7e 07 05 03 RR GG BB 10 ef` | `7e 07 …` power frames, max 10 updates/s |
 | `melk` | MELK-… | `7e 00 05 03 RR GG BB 00 ef` | sends a login right after connecting, or the controller hangs up |
 
 Sources: `app` is what the Android twin of LotusLanternX ("Lotus Lantern", `wl.smartled`)
@@ -83,11 +108,13 @@ sends, decompiled independently by
 [elkbledom](https://github.com/dave-code-ruiz/elkbledom) (Home Assistant),
 [elk-led-controller](https://github.com/b1scoito/elk-led-controller),
 [ELK-BLEDOM](https://github.com/FergusInLondon/ELK-BLEDOM) and
-[bledom-qt](https://github.com/uriid1-experiments/bledom-qt) send. `bledob` and `melk`
-come from elkbledom's per-model tables.
+[bledom-qt](https://github.com/uriid1-experiments/bledom-qt) send. `bledob` comes from
+[elk-bledob](https://github.com/8none1/elk-bledob)'s Bluetooth captures of the vendor
+app, `melk` from elkbledom's per-model tables.
 
 Writes are capped at 20 per second (10 for `bledob`), about what the controller's chip
-handles before it starts dropping frames.
+handles before it starts dropping frames. Only `bench --fps N` goes past the cap, to
+find where your unit gives up.
 
 ## Development
 

@@ -11,7 +11,9 @@ import argparse
 import asyncio
 import colorsys
 import contextlib
+import math
 import sys
+import threading
 import time
 
 from bleak.exc import BleakError
@@ -49,6 +51,32 @@ def parse_color(parts: list[str]) -> tuple[int, int, int]:
     if not all(0 <= c <= 255 for c in rgb):
         raise ValueError("color values must be 0-255")
     return rgb  # type: ignore[return-value]
+
+
+async def ask(prompt: str) -> str:
+    """input() on a daemon thread, so the event loop (and the Bluetooth link) keeps
+    running, and Ctrl-C does not leave the process waiting for Enter."""
+    loop = asyncio.get_running_loop()
+    answer = loop.create_future()
+
+    def settle(result: str | None, error: BaseException | None) -> None:
+        if answer.done():
+            return
+        if error is not None:
+            answer.set_exception(error)
+        else:
+            answer.set_result(result)
+
+    def read() -> None:
+        try:
+            result, error = input(prompt), None
+        except BaseException as e:  # EOFError when stdin is closed
+            result, error = None, e
+        with contextlib.suppress(RuntimeError):  # the loop is already gone
+            loop.call_soon_threadsafe(settle, result, error)
+
+    threading.Thread(target=read, daemon=True).start()
+    return await answer
 
 
 def describe(found: Found) -> str:
@@ -95,7 +123,8 @@ async def cmd_inspect(args) -> int:
     print(f"{found.name or '(no name)'} [{found.address}]  {signal(found)}")
     print(f"advertised services: {', '.join(found.service_uuids) or '-'}")
     print(f"guessed variant: {protocol.variant_for_name(found.name).key}\n")
-    async with LedStrip(found) as strip:
+    variant = protocol.VARIANTS[args.variant] if args.variant else None
+    async with LedStrip(found, variant, with_response=args.with_response) as strip:
         print(f"firmware id: {await strip.firmware_id()}\n")
         for service in strip.services:
             print(f"service {service.uuid}  {service.description}")
@@ -149,15 +178,17 @@ async def cmd_test(args) -> int:
 
 
 async def cmd_bench(args) -> int:
-    """Stream a rainbow as fast as asked and report the rate the link sustains.
+    """Stream a rainbow and report the rate the link sustains.
 
-    The controller is rated for about 20 updates per second; screen sync needs
-    15-20 to look smooth. Ask for more with --fps to see where your unit gives up.
+    By default it runs at the variant's cap (20 updates per second, 10 for bledob);
+    screen sync needs 15-20 to look smooth. Pass --fps to push past the cap and see
+    where your unit gives up.
     """
     async with connected(args, max_rate=args.fps) as strip:
+        fps = args.fps or strip.variant.max_rate
         await strip.power(True)
         await strip.brightness(100)
-        interval = 1 / args.fps
+        interval = 1 / fps
         sent = 0
         start = time.perf_counter()
         next_at = start
@@ -169,7 +200,7 @@ async def cmd_bench(args) -> int:
             next_at += interval
             await asyncio.sleep(max(0.0, next_at - time.perf_counter()))
         elapsed = time.perf_counter() - start
-        print(f"Sent {sent} colors in {elapsed:.1f}s = {sent / elapsed:.1f} updates/s (asked for {args.fps:g}).")
+        print(f"Sent {sent} colors in {elapsed:.1f}s = {sent / elapsed:.1f} updates/s (asked for {fps:g}).")
         print("Did the rainbow look smooth? If it stuttered or lagged behind, try a lower --fps.")
     return 0
 
@@ -188,34 +219,50 @@ async def cmd_probe(args) -> int:
     from an earlier attempt or from the phone app.
     """
     found = await device.resolve(args.device, args.timeout)
-    guess = protocol.variant_for_name(found.name)
-    order = [guess] + [v for v in protocol.VARIANTS.values() if v.key != guess.key]
+    first = protocol.VARIANTS[args.variant] if args.variant else protocol.variant_for_name(found.name)
+    order = [first] + [v for v in protocol.VARIANTS.values() if v.key != first.key]
     for variant in order:
         print(f"\nTrying variant '{variant.key}': {variant.description}")
-        async with LedStrip(found, variant, with_response=args.with_response) as strip:
-            for packet in protocol.WAKE_FRAMES:
-                await strip.write(packet)
-            await strip.power(True)
-            blink = asyncio.create_task(_blink(strip))
-            try:
-                # input() blocks; keep the event loop (and the Bluetooth link) running meanwhile.
-                answer = await asyncio.to_thread(input, "Is the strip blinking RED and BLUE? [y/N] ")
-            finally:
-                blink.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await blink
-            if answer.strip().lower().startswith("y"):
-                await strip.color(255, 255, 255)
-                print(f"\nYour strip speaks variant '{variant.key}'. Add this to every command: --variant {variant.key}")
-                return 0
+        try:
+            async with LedStrip(found, variant, with_response=args.with_response) as strip:
+                for packet in protocol.WAKE_FRAMES:
+                    await strip.write(packet)
+                await strip.power(True)
+                blink = asyncio.create_task(_blink(strip))
+                try:
+                    answer = await ask("Is the strip blinking RED and BLUE? [y/N] ")
+                finally:
+                    blink.cancel()
+                    (outcome,) = await asyncio.gather(blink, return_exceptions=True)
+                if isinstance(outcome, Exception):
+                    # The blink loop only ends on its own when a write failed.
+                    raise outcome
+                if answer.strip().lower().startswith("y"):
+                    await strip.color(255, 255, 255)
+                    print(f"\nYour strip speaks variant '{variant.key}'. Add this to every command: --variant {variant.key}")
+                    return 0
+        except (BleakError, asyncio.TimeoutError, OSError) as e:
+            # A controller that does not like the dialect (or misses the MELK login)
+            # may simply hang up; that only rules this variant out.
+            print(f"  the strip dropped the connection with this variant ({e or type(e).__name__}); moving on")
     print("\nNo variant worked. Run 'inspect' and share the output so we can add support.")
     return 1
+
+
+def positive(limit: float):
+    def parse(text: str) -> float:
+        value = float(text)
+        if not (math.isfinite(value) and 0 < value <= limit):
+            raise argparse.ArgumentTypeError(f"must be more than 0 and at most {limit:g}")
+        return value
+
+    return parse
 
 
 def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("-d", "--device", help="address (MAC, or UUID on macOS) or name prefix; default: auto-pick")
-    common.add_argument("-t", "--timeout", type=float, default=8.0, help="scan seconds (default 8)")
+    common.add_argument("-t", "--timeout", type=positive(120), default=8.0, help="scan seconds (default 8)")
     common.add_argument("--variant", choices=sorted(protocol.VARIANTS), help="force a protocol variant")
     common.add_argument(
         "--with-response",
@@ -250,14 +297,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     p = sub.add_parser("bench", parents=[common], help="stream a rainbow and measure updates/second")
-    p.add_argument("--fps", type=float, default=20, help="target updates per second (default 20)")
-    p.add_argument("--seconds", type=float, default=10, help="how long to run (default 10)")
+    p.add_argument(
+        "--fps", type=positive(100), default=None, help="updates per second (default: the variant's cap, 20 or 10)"
+    )
+    p.add_argument("--seconds", type=positive(600), default=10, help="how long to run (default 10)")
     p.set_defaults(func=cmd_bench)
 
     sub.add_parser("probe", parents=[common], help="find which protocol variant your strip uses").set_defaults(
         func=cmd_probe
     )
     return parser
+
+
+HINT = (
+    "Check that Bluetooth is on, the strip is powered, and LotusLanternX is fully "
+    "closed on your phone (the strip accepts one connection at a time)."
+)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -269,11 +324,29 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     except BleakError as e:
         print(f"bluetooth error: {e}", file=sys.stderr)
+        print(HINT, file=sys.stderr)
+        return 1
+    except (TimeoutError, asyncio.TimeoutError):
+        print("error: the strip did not answer in time.", file=sys.stderr)
+        print(HINT + " Moving the PC closer can help too.", file=sys.stderr)
+        return 1
+    except (FileNotFoundError, ConnectionRefusedError) as e:
+        # dbus_fast on Linux, when there is no system bus or bluetoothd.
+        print(f"error: cannot reach the Bluetooth service ({e}).", file=sys.stderr)
         print(
-            "Check that Bluetooth is on, the strip is powered, and LotusLanternX is fully "
-            "closed on your phone (the strip accepts one connection at a time).",
+            "On Linux, check that bluetoothd is running ('systemctl status bluetooth'). "
+            "WSL has no Bluetooth: run this from Windows itself.",
             file=sys.stderr,
         )
         return 1
+    except OSError as e:
+        # WinRT reports radio and driver problems as OSError.
+        print(f"bluetooth error: {e}", file=sys.stderr)
+        print(HINT, file=sys.stderr)
+        return 1
+    except EOFError:
+        print("\nerror: this command needs an answer typed in the terminal.", file=sys.stderr)
+        return 1
     except KeyboardInterrupt:
+        print("\nInterrupted.", file=sys.stderr)
         return 130

@@ -6,8 +6,9 @@ dialect it speaks: ``probe`` tries each one while the user watches the strip.
 
 Sources: the "app" frames are what the Lotus Lantern Android app (wl.smartled, the
 twin of the LotusLanternX iPhone app) sends, decompiled independently by lotus-led and
-Rxflex/LotusLantern. "classic" is what most other open-source tools send. bledob and
-melk come from the elkbledom Home Assistant integration's per-model tables.
+Rxflex/LotusLantern. "classic" is what most other open-source tools send. bledob comes
+from 8none1/elk-bledob's Bluetooth captures, melk from the elkbledom Home Assistant
+integration's per-model tables.
 """
 
 from __future__ import annotations
@@ -101,7 +102,9 @@ VARIANTS: dict[str, Variant] = {
             name_prefixes=("ELK-BLEDOB", "ELK-BLEDOM0E", "BLEDOB"),
             power_on=frame(0x07, 0x04, 0xFF, 0x00, 0x01, 0x02, 0x01),
             power_off=frame(0x07, 0x04, 0x00, 0x00, 0x00, 0x02, 0x01),
-            color_template=(0x07, 0x05, 0x03, "R", "G", "B", 0x0A),
+            # Trailer 0x10 as in 8none1/elk-bledob's captures of the vendor app; the
+            # elkbledom table's 10 looks like that hex value copied as decimal.
+            color_template=(0x07, 0x05, 0x03, "R", "G", "B", 0x10),
             brightness_template=(0x04, 0x01, "L", 0x01, 0xFF, 0x02, 0x01),
             # Drops a command that follows another too closely.
             max_rate=10.0,

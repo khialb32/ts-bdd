@@ -54,12 +54,13 @@ def test_app_brightness_is_a_percentage():
     assert h(APP.brightness(0)) == "7e 04 01 00 ff ff ff 00 ef"
 
 
-# Expected bytes for bledob and melk are the elkbledom integration's models.json.
+# Expected bytes for bledob are 8none1/elk-bledob's captures of the vendor app; for
+# melk, the elkbledom integration's models.json.
 def test_bledob_frames():
     bledob = VARIANTS["bledob"]
     assert h(bledob.power(True)) == "7e 07 04 ff 00 01 02 01 ef"
     assert h(bledob.power(False)) == "7e 07 04 00 00 00 02 01 ef"
-    assert h(bledob.color(1, 2, 3)) == "7e 07 05 03 01 02 03 0a ef"
+    assert h(bledob.color(1, 2, 3)) == "7e 07 05 03 01 02 03 10 ef"
     assert h(bledob.brightness(100)) == "7e 04 01 64 01 ff 02 01 ef"
     assert bledob.max_rate == 10
 

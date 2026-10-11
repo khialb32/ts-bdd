@@ -35,7 +35,8 @@ CONNECT_ATTEMPTS = 3
 # straight away can drop it, so linger a moment before letting go.
 FLUSH_BEFORE_DISCONNECT = 0.6
 
-_ADDRESS = re.compile(r"^([0-9a-f]{2}[:-]){5}[0-9a-f]{2}$|^[0-9a-f]{8}-([0-9a-f]{4}-){3}[0-9a-f]{12}$", re.I)
+_MAC = re.compile(r"^([0-9a-f]{2}[:-]){5}[0-9a-f]{2}$", re.I)
+_UUID = re.compile(r"^[0-9a-f]{8}-([0-9a-f]{4}-){3}[0-9a-f]{12}$", re.I)
 
 
 @dataclass
@@ -50,18 +51,30 @@ class Found:
         return self.device if isinstance(self.device, str) else self.device.address
 
     @property
+    def match(self) -> int:
+        return match_strength(self.name, self.service_uuids, self.address)
+
+    @property
     def is_candidate(self) -> bool:
-        return is_candidate(self.name, self.service_uuids, self.address)
+        return self.match > 0
+
+
+def match_strength(name: str | None, service_uuids: list[str] | None = None, address: str = "") -> int:
+    """How much the advertisement looks like a LotusLanternX-compatible controller.
+
+    2: known name or MAC block. 1: only a generic service UUID, which plenty of other
+    gadgets (key finders, HM-10 modules) advertise too. 0: no resemblance.
+    """
+    if name and protocol.matches_known_prefix(name):
+        return 2
+    if address.upper().startswith(KNOWN_MAC_PREFIXES):
+        return 2
+    uuids = {u.lower() for u in (service_uuids or [])}
+    return 1 if any(u in uuids for u in SERVICE_UUIDS) else 0
 
 
 def is_candidate(name: str | None, service_uuids: list[str] | None = None, address: str = "") -> bool:
-    """True if the advertisement looks like a LotusLanternX-compatible controller."""
-    if name and protocol.matches_known_prefix(name):
-        return True
-    if address.upper().startswith(KNOWN_MAC_PREFIXES):
-        return True
-    uuids = {u.lower() for u in (service_uuids or [])}
-    return any(u in uuids for u in SERVICE_UUIDS)
+    return match_strength(name, service_uuids, address) > 0
 
 
 async def scan(timeout: float = 8.0) -> list[Found]:
@@ -86,6 +99,9 @@ async def resolve(identifier: str | None, timeout: float = 8.0) -> Found:
     An address is a MAC on Windows/Linux and a UUID on macOS. A name matches
     case-insensitively, and a prefix is enough ("ELK" finds "ELK-BLEDOM").
     """
+    if identifier and _MAC.match(identifier):
+        # Windows writes MACs with dashes; bleak reports them with colons.
+        identifier = identifier.replace("-", ":").upper()
     found = await scan(timeout)
     if identifier:
         wanted = identifier.lower()
@@ -95,7 +111,7 @@ async def resolve(identifier: str | None, timeout: float = 8.0) -> Found:
         for f in found:
             if f.name.lower().startswith(wanted):
                 return f
-        if _ADDRESS.match(identifier):
+        if _MAC.match(identifier) or _UUID.match(identifier):
             # Controllers often skip advertising for a while after a disconnect, but
             # still accept a connection to their address.
             print(f"{identifier} did not show up in the scan; trying to connect anyway.")
@@ -104,23 +120,32 @@ async def resolve(identifier: str | None, timeout: float = 8.0) -> Found:
             f"No device matching {identifier!r} was found. Is the strip powered, "
             "and is the phone app closed? Run 'scan' to see what is visible."
         )
-    candidates = [f for f in found if f.is_candidate]
+    # found is strongest signal first; sorted() keeps that order within each rank.
+    candidates = sorted((f for f in found if f.is_candidate), key=lambda f: f.match, reverse=True)
     if not candidates:
         raise LookupError(
             "No LED controller found. Close LotusLanternX on your phone (the strip "
-            "accepts one connection at a time), then run 'scan --all'."
+            "accepts one connection at a time), then run 'scan --all'. On macOS, a strip "
+            "that advertises no name cannot be recognized: pass its UUID with -d."
         )
+    best = candidates[0]
     if len(candidates) > 1:
-        listed = ", ".join(f"{c.name} [{c.address}]" for c in candidates)
-        print(f"Several controllers found ({listed}); using the strongest signal.")
-    return candidates[0]
+        listed = ", ".join(f"{c.name or '(no name)'} [{c.address}]" for c in candidates)
+        print(f"Several possible controllers found ({listed}); using {best.address}.")
+    if best.match < 2:
+        print(
+            f"Picked {best.address} only because it advertises a common LED-controller service. "
+            "If nothing happens, it may be another gadget: close the phone app or pass -d."
+        )
+    return best
 
 
 def pick_write_char(client: BleakClient) -> BleakGATTCharacteristic:
     """Find the controller's command characteristic among the discovered services."""
+    writable = {"write", "write-without-response"}
     for uuid in WRITE_CHAR_UUIDS:
         char = client.services.get_characteristic(uuid)
-        if char is not None:
+        if char is not None and writable & set(char.properties):
             return char
     # Unknown firmware: fall back to the first writable characteristic outside
     # the standard GAP/GATT services.
@@ -128,7 +153,7 @@ def pick_write_char(client: BleakClient) -> BleakGATTCharacteristic:
         if service.uuid.startswith(("00001800", "00001801")):
             continue
         for char in service.characteristics:
-            if {"write", "write-without-response"} & set(char.properties):
+            if writable & set(char.properties):
                 return char
     raise LookupError("The device has no writable characteristic; it is probably not an LED controller.")
 
@@ -147,8 +172,9 @@ class LedStrip:
         self.found = found
         self.variant = variant or protocol.variant_for_name(found.name)
         self._with_response = with_response
-        self._min_interval = 1 / (max_rate or self.variant.max_rate)
-        self._last_write = 0.0
+        self._min_interval = 1 / (self.variant.max_rate if max_rate is None else max_rate)
+        self._next_write = 0.0
+        self._wrote = False
         self._client = BleakClient(found.device, timeout=20)
         self._char: BleakGATTCharacteristic | None = None
 
@@ -159,23 +185,31 @@ class LedStrip:
             try:
                 await self._client.connect()
                 break
-            except (BleakError, asyncio.TimeoutError):
+            except (BleakError, asyncio.TimeoutError) as e:
                 if attempt == CONNECT_ATTEMPTS:
                     raise
+                print(f"Connection attempt {attempt}/{CONNECT_ATTEMPTS} failed ({e or type(e).__name__}); retrying...")
                 await asyncio.sleep(1)
-        self._char = pick_write_char(self._client)
-        if self._with_response is None:
-            # Write-without-response is much faster, which matters for screen sync.
-            self._with_response = "write-without-response" not in self._char.properties
-        for packet, pause in self.variant.init:
-            await self._client.write_gatt_char(self.char, packet, response=self.with_response)
-            await asyncio.sleep(pause)
+        try:
+            self._char = pick_write_char(self._client)
+            if self._with_response is None:
+                # Write-without-response is much faster, which matters for screen sync.
+                self._with_response = "write-without-response" not in self._char.properties
+            for packet, pause in self.variant.init:
+                await self._client.write_gatt_char(self.char, packet, response=self.with_response)
+                await asyncio.sleep(pause)
+        except BaseException:
+            # Also on Ctrl-C: BlueZ keeps a link open after the process exits.
+            await self._client.disconnect()
+            raise
         return self
 
     async def __aexit__(self, *exc) -> None:
-        if self._last_write and not self.with_response:
-            await asyncio.sleep(FLUSH_BEFORE_DISCONNECT)
-        await self._client.disconnect()
+        try:
+            if self._wrote and not self.with_response:
+                await asyncio.sleep(FLUSH_BEFORE_DISCONNECT)
+        finally:
+            await self._client.disconnect()
 
     @property
     def char(self) -> BleakGATTCharacteristic:
@@ -201,11 +235,13 @@ class LedStrip:
         return data.decode("ascii", errors="replace").replace("\x00", "").strip() or "unknown"
 
     async def write(self, packet: bytes) -> None:
-        wait = self._last_write + self._min_interval - time.monotonic()
+        # Space write *starts* evenly, so a slow write does not lower the rate.
+        wait = self._next_write - time.monotonic()
         if wait > 0:
             await asyncio.sleep(wait)
+        self._next_write = max(time.monotonic(), self._next_write) + self._min_interval
         await self._client.write_gatt_char(self.char, packet, response=self.with_response)
-        self._last_write = time.monotonic()
+        self._wrote = True
 
     async def power(self, on: bool) -> None:
         await self.write(self.variant.power(on))
