@@ -42,3 +42,43 @@ def test_every_command_parses():
 def test_brightness_out_of_range_is_rejected():
     with pytest.raises(SystemExit):
         build_parser().parse_args(["brightness", "150"])
+
+
+class RecordingStrip:
+    log = []
+
+    def __init__(self, found, variant, **kwargs):
+        self.variant = variant
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        pass
+
+    async def power(self, on):
+        self.log.append((self.variant.key, "power", on))
+
+    async def color(self, *rgb):
+        self.log.append((self.variant.key, "color", rgb))
+
+
+def test_probe_shows_a_different_color_per_variant_and_stops_on_yes(monkeypatch):
+    import asyncio
+
+    from ambilight import cli, device
+    from ambilight.device import Found
+
+    async def fake_resolve(identifier, timeout):
+        return Found(device="BE:60:65:00:00:01", name="ELK-BLEDOM", rssi=-50, service_uuids=[])
+
+    answers = iter(["n", "y"])
+    monkeypatch.setattr(device, "resolve", fake_resolve)
+    monkeypatch.setattr(cli, "LedStrip", RecordingStrip)
+    monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
+    RecordingStrip.log = []
+
+    args = build_parser().parse_args(["probe"])
+    assert asyncio.run(cli.cmd_probe(args)) == 0
+    colors = [(key, rgb) for key, kind, rgb in RecordingStrip.log if kind == "color"]
+    assert colors == [("lotus", (255, 0, 0)), ("legacy", (0, 255, 0)), ("legacy", (255, 255, 255))]
